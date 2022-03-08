@@ -39,7 +39,8 @@ GENCODE_SM35  := -gencode arch=compute_35,code=sm_35
 GENCODE_SM50  := -gencode arch=compute_50,code=sm_50
 GENCODE_SM52  := -gencode arch=compute_52,code=sm_52
 GENCODE_SM60  := -gencode arch=compute_60,code=sm_60
-GENCODE_FLAGS := $(GENCODE_SM35) $(GENCODE_SM52) $(GENCODE_SM60)
+GENCODE_SM80  := -gencode arch=compute_80,code=sm_80
+GENCODE_FLAGS := $(GENCODE_SM35) $(GENCODE_SM52) $(GENCODE_SM60) $(GENCODE_SM80)
 
 #######################################################
 
