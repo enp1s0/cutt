@@ -90,9 +90,9 @@ OBJS = $(OBJSLIB) $(OBJSTEST) $(OBJSBENCH)
 CUDAROOT = $(subst /bin/,,$(dir $(shell which $(CUDAC))))
 
 CFLAGS = -I${CUDAROOT}/include -std=c++11 $(DEFS) $(OPTLEV)
-ifeq ($(CPU),x86_64)
-CFLAGS += -march=native
-endif
+#ifeq ($(CPU),x86_64)
+#CFLAGS += -march=native
+#endif
 
 CUDA_CFLAGS = -I${CUDAROOT}/include -std=c++11 $(OPTLEV) -Xptxas -dlcm=ca -lineinfo $(GENCODE_FLAGS) --resource-usage -Xcompiler "$(CUDA_CCFLAGS)" $(DEFS) -D_FORCE_INLINES
 
