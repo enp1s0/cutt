@@ -29,6 +29,53 @@ SOFTWARE.
 
 #define RESTRICT __restrict__
 
+namespace cp_async {
+namespace detail {
+__device__ inline uint32_t get_smem_ptr_uint(const void* const ptr) {
+  uint32_t smem_ptr;
+  asm volatile("{.reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n": "=r"(smem_ptr) : "l"(ptr));
+  return smem_ptr;
+}
+} // namespace detail
+
+template <unsigned Size>
+__device__ inline void cp_async(void* const smem, const void* const gmem) {
+#if __CUDA_ARCH__ >= 800
+	static_assert(Size == 4 || Size == 8 || Size == 16, "Size must be one of 4, 8 and 16");
+	const unsigned smem_int_ptr = detail::get_smem_ptr_uint(smem);
+	asm volatile("{cp.async.ca.shared.global [%0], [%1], %2;}" :: "r"(smem_int_ptr), "l"(gmem), "n"(Size));
+#else
+	for (unsigned i = 0; i < Size / 4; i++) {
+		*(reinterpret_cast<uint32_t*>(smem) + i) = *(reinterpret_cast<const uint32_t*>(gmem) + i);
+	}
+#endif
+}
+
+__device__ inline void commit() {
+#if __CUDA_ARCH__ >= 800
+	asm volatile("{cp.async.commit_group;}\n");
+#endif
+}
+
+__device__ inline void wait_all() {
+#if __CUDA_ARCH__ >= 800
+	asm volatile("{cp.async.wait_all;}");
+#endif
+}
+
+template <int N>
+__device__ inline void wait_group() {
+#if __CUDA_ARCH__ >= 800
+	asm volatile("{cp.async.wait_group %0;}":: "n"(N));
+#endif
+}
+
+template <class T>
+struct size_of{static const uint32_t value = 0;};
+template <> struct size_of<float >{static const uint32_t value = 4;};
+template <> struct size_of<double>{static const uint32_t value = 8;};
+} // namespace cp_async
+
 //
 // Transpose when Mm and Mk don't overlap and contain only single rank
 //
@@ -77,14 +124,11 @@ __global__ void transposeTiled(
 
     // Compute global memory positions
     int posMajorIn = ((posMbar/Mbar.c_in) % Mbar.d_in)*Mbar.ct_in;
-    int posMajorOut = ((posMbar/Mbar.c_out) % Mbar.d_out)*Mbar.ct_out;
 #pragma unroll
     for (int i=16;i >= 1;i/=2) {
       posMajorIn += __shfl_xor_sync(0xffffffff, posMajorIn, i);
-      posMajorOut += __shfl_xor_sync(0xffffffff, posMajorOut, i);
     }
     int posIn = posMajorIn + posMinorIn;
-    int posOut = posMajorOut + posMinorOut;
 
     // Read from global memory
     __syncthreads();
@@ -95,11 +139,20 @@ __global__ void transposeTiled(
       // int pos = posIn + j*cuDimMk;
       // if (xin < readVol.x && yin + j < readVol.y) {
       if ((maskIny & (1 << j)) != 0) {
-        shTile[threadIdx.y + j][threadIdx.x] = dataIn[posIn];
+		cp_async::cp_async<cp_async::size_of<T>::value>(&shTile[threadIdx.y + j][threadIdx.x], &dataIn[posIn]);
       }
+	  cp_async::commit();
       posIn += posInAdd;
     }
 
+    int posMajorOut = ((posMbar/Mbar.c_out) % Mbar.d_out)*Mbar.ct_out;
+#pragma unroll
+    for (int i=16;i >= 1;i/=2) {
+      posMajorOut += __shfl_xor_sync(0xffffffff, posMajorOut, i);
+    }
+    int posOut = posMajorOut + posMinorOut;
+
+	cp_async::wait_all();
     // Write to global memory
     __syncthreads();
 
@@ -112,9 +165,7 @@ __global__ void transposeTiled(
       }
       posOut += posOutAdd;
     }
-
   }
-  
 }
 
 //
@@ -184,12 +235,6 @@ __global__ void transposePacked(
   for (int posMbar=blockIdx.x;posMbar < volMbar;posMbar += gridDim.x)
   {
 
-    int posMbarOut = ((posMbar/Mbar.c_out) % Mbar.d_out)*Mbar.ct_out;
-#pragma unroll
-    for (int i=16;i >= 1;i/=2) {
-      posMbarOut += __shfl_xor_sync(0xffffffff, posMbarOut, i);
-    }
-
     int posMbarIn = ((posMbar/Mbar.c_in) % Mbar.d_in)*Mbar.ct_in;
 #pragma unroll
     for (int i=16;i >= 1;i/=2) {
@@ -203,8 +248,19 @@ __global__ void transposePacked(
     for (int j=0;j < numRegStorage;j++) {
       int posMmk = threadIdx.x + j*blockDim.x;
       int posIn = posMbarIn + posMmkIn[j];
-      if (posMmk < volMmk) shBuffer[posMmk] = dataIn[posIn];
+      if (posMmk < volMmk) {
+		cp_async::cp_async<cp_async::size_of<T>::value>(&shBuffer[posMmk], &dataIn[posIn]);
+	  }
+	  cp_async::commit();
     }
+
+    int posMbarOut = ((posMbar/Mbar.c_out) % Mbar.d_out)*Mbar.ct_out;
+#pragma unroll
+    for (int i=16;i >= 1;i/=2) {
+      posMbarOut += __shfl_xor_sync(0xffffffff, posMbarOut, i);
+    }
+
+	cp_async::wait_all();
 
     __syncthreads();
 
@@ -215,10 +271,7 @@ __global__ void transposePacked(
       int posOut = posMbarOut + posMmkOut[j];
       if (posMmk < volMmk) dataOut[posOut] = shBuffer[posSh[j]];
     }
-
-
   }
-  
 }
 
 //
@@ -310,12 +363,6 @@ __global__ void transposePackedSplit(
   // for (int posMbar=blockIdx.y;posMbar < volMbar;posMbar+=gridDim.y)
   {
 
-    int posMbarOut = ((posMbar/Mbar.c_out) % Mbar.d_out)*Mbar.ct_out;
-#pragma unroll
-    for (int i=16;i >= 1;i/=2) {
-      posMbarOut += __shfl_xor_sync(0xffffffff, posMbarOut, i);
-    }
-
     int posMbarIn = ((posMbar/Mbar.c_in) % Mbar.d_in)*Mbar.ct_in;
 #pragma unroll
     for (int i=16;i >= 1;i/=2) {
@@ -329,8 +376,18 @@ __global__ void transposePackedSplit(
     for (int j=0;j < numRegStorage;j++) {
       int posMmk = threadIdx.x + j*blockDim.x;
       int posIn = posMbarIn + posMmkIn[j];
-      if (posMmk < volMmkSplit) shBuffer[posMmk] = dataIn[posIn];
+      if (posMmk < volMmkSplit) {
+	    cp_async::cp_async<cp_async::size_of<T>::value>(&shBuffer[posMmk], &dataIn[posIn]);
+	  }
+	  cp_async::commit();
     }
+
+    int posMbarOut = ((posMbar/Mbar.c_out) % Mbar.d_out)*Mbar.ct_out;
+#pragma unroll
+    for (int i=16;i >= 1;i/=2) {
+      posMbarOut += __shfl_xor_sync(0xffffffff, posMbarOut, i);
+    }
+	cp_async::wait_all();
 
     // Write to global memory
     __syncthreads();
@@ -341,9 +398,7 @@ __global__ void transposePackedSplit(
       int posOut = posMbarOut + posMmkOut[j];
       if (posMmk < volMmkSplit) dataOut[posOut] = shBuffer[posSh[j]];
     }
-
   }
-
 }
 
 #if 1
@@ -420,9 +475,7 @@ __global__ void transposeTiledCopy(
       }
       posOut += posOutAdd;
     }
-
   }
-  
 }
 #else
 
