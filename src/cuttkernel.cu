@@ -917,19 +917,19 @@ void simple_copy(
 		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
 	} else if (size % 8 == 0) {
 		const auto count = size / 8;
-		using data_t = std::uint64_t;
+		using data_t = uint64_t;
 		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
 	} else if (size % 4 == 0) {
 		const auto count = size / 4;
-		using data_t = std::uint32_t;
+		using data_t = uint32_t;
 		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
 	} else if (size % 2 == 0) {
 		const auto count = size / 2;
-		using data_t = std::uint16_t;
+		using data_t = uint16_t;
 		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
 	} else {
 		const auto count = size;
-		using data_t = std::uint8_t;
+		using data_t = uint8_t;
 		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
 	}
 }
