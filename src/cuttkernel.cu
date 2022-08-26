@@ -890,6 +890,50 @@ int cuttKernelLaunchConfiguration(const int sizeofType, const TensorSplit& ts,
   return numActiveBlockReturn;
 }
 
+template <class T>
+__global__ void simple_copy_kernel(
+		T* const dst_ptr,
+		const T* const src_ptr,
+		const std::size_t count
+		) {
+	const auto tid = threadIdx.x + blockIdx.x * blockDim.x;
+	if (tid >= count) {
+		return;
+	}
+
+	dst_ptr[tid] = src_ptr[tid];
+}
+
+void simple_copy(
+		void* const dst_ptr,
+		const void* const src_ptr,
+		const std::size_t size,
+		cudaStream_t cuda_stream
+		) {
+	const auto block_size = 256;
+	if (size % 16  == 0) {
+		const auto count = size / 16;
+		using data_t = ulong2;
+		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+	} else if (size % 8 == 0) {
+		const auto count = size / 8;
+		using data_t = std::uint64_t;
+		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+	} else if (size % 4 == 0) {
+		const auto count = size / 4;
+		using data_t = std::uint32_t;
+		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+	} else if (size % 2 == 0) {
+		const auto count = size / 2;
+		using data_t = std::uint16_t;
+		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+	} else {
+		const auto count = size;
+		using data_t = std::uint8_t;
+		simple_copy_kernel<data_t><<<(count + block_size - 1) / block_size, block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+	}
+}
+
 bool cuttKernel(cuttPlan_t& plan, void* dataIn, void* dataOut) {
 
   LaunchConfig& lc = plan.launchConfig;
@@ -898,8 +942,9 @@ bool cuttKernel(cuttPlan_t& plan, void* dataIn, void* dataOut) {
   switch(ts.method) {
     case Trivial:
     {
-      cudaCheck(cudaMemcpyAsync(dataOut, dataIn, ts.volMmk*ts.volMbar*plan.sizeofType,
-        cudaMemcpyDeviceToDevice, plan.stream));
+			simple_copy(dataOut, dataIn, ts.volMmk*ts.volMbar*plan.sizeofType, plan.stream);
+      //cudaCheck(cudaMemcpyAsync(dataOut, dataIn, ts.volMmk*ts.volMbar*plan.sizeofType,
+      //  cudaMemcpyDeviceToDevice, plan.stream));
     }
     break;
 
