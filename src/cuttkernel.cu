@@ -890,6 +890,76 @@ int cuttKernelLaunchConfiguration(const int sizeofType, const TensorSplit& ts,
   return numActiveBlockReturn;
 }
 
+template <class T, unsigned COPY_BLOCK_SIZE>
+__global__ void simple_block_copy_kernel(
+    T* const dst_ptr,
+    const T* const src_ptr,
+		const std::size_t count
+		) {
+	const std::size_t elements_per_thread_block = blockDim.x * COPY_BLOCK_SIZE;
+	const std::size_t major_offset = threadIdx.x + blockIdx.x * elements_per_thread_block;
+	if (major_offset >= count) {
+		return;
+	}
+	if (major_offset + elements_per_thread_block < count) {
+		T copy_block[COPY_BLOCK_SIZE];
+		for (std::size_t i = 0; i < COPY_BLOCK_SIZE; i++) {
+			const auto minor_offset = i * blockDim.x;
+			copy_block[i] = src_ptr[major_offset + minor_offset];
+		}
+		for (std::size_t i = 0; i < COPY_BLOCK_SIZE; i++) {
+			const auto minor_offset = i * blockDim.x;
+			dst_ptr[major_offset + minor_offset] = copy_block[i];
+		}
+	} else {
+		T copy_block[COPY_BLOCK_SIZE];
+		for (std::size_t i = 0; i < COPY_BLOCK_SIZE; i++) {
+			const auto minor_offset = i * blockDim.x;
+			if (major_offset + minor_offset < count) {
+				copy_block[i] = src_ptr[major_offset + minor_offset];
+			}
+		}
+		for (std::size_t i = 0; i < COPY_BLOCK_SIZE; i++) {
+			const auto minor_offset = i * blockDim.x;
+			if (major_offset + minor_offset < count) {
+				dst_ptr[major_offset + minor_offset] = copy_block[i];
+			}
+		}
+	}
+}
+
+template <unsigned COPY_BLOCK_SIZE>
+void simple_block_copy(
+    void* const dst_ptr,
+    const void* const src_ptr,
+    const std::size_t size,
+    cudaStream_t cuda_stream = 0
+    ) {
+  const auto block_size = 256;
+	const auto grid_size = [block_size](const std::size_t count) {return ((count + block_size - 1) / block_size + COPY_BLOCK_SIZE - 1) / COPY_BLOCK_SIZE;};
+  if (size % 16  == 0) {
+    const auto count = size / 16;
+    using data_t = ulong2;
+    simple_block_copy_kernel<data_t, COPY_BLOCK_SIZE><<<grid_size(count), block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+  } else if (size % 8 == 0) {
+    const auto count = size / 8;
+    using data_t = uint64_t;
+    simple_block_copy_kernel<data_t, COPY_BLOCK_SIZE><<<grid_size(count), block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+  } else if (size % 4 == 0) {
+    const auto count = size / 4;
+    using data_t = uint32_t;
+    simple_block_copy_kernel<data_t, COPY_BLOCK_SIZE><<<grid_size(count), block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+  } else if (size % 2 == 0) {
+    const auto count = size / 2;
+    using data_t = uint16_t;
+    simple_block_copy_kernel<data_t, COPY_BLOCK_SIZE><<<grid_size(count), block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+  } else {
+    const auto count = size;
+    using data_t = uint8_t;
+    simple_block_copy_kernel<data_t, COPY_BLOCK_SIZE><<<grid_size(count), block_size, 0, cuda_stream>>>(reinterpret_cast<data_t*>(dst_ptr), reinterpret_cast<const data_t*>(src_ptr), count);
+  }
+}
+
 bool cuttKernel(cuttPlan_t& plan, void* dataIn, void* dataOut) {
 
   LaunchConfig& lc = plan.launchConfig;
@@ -898,8 +968,9 @@ bool cuttKernel(cuttPlan_t& plan, void* dataIn, void* dataOut) {
   switch(ts.method) {
     case Trivial:
     {
-      cudaCheck(cudaMemcpyAsync(dataOut, dataIn, ts.volMmk*ts.volMbar*plan.sizeofType,
-        cudaMemcpyDeviceToDevice, plan.stream));
+      //cudaCheck(cudaMemcpyAsync(dataOut, dataIn, ts.volMmk*ts.volMbar*plan.sizeofType,
+      //  cudaMemcpyDeviceToDevice, plan.stream));
+      simple_block_copy<4>(dataOut, dataIn, ts.volMmk*ts.volMbar*plan.sizeofType, plan.stream);
     }
     break;
 
